@@ -1,0 +1,21 @@
+# Game Kings Chess. dockerfilePath and dockerContext are relative to rootDir.
+services:
+  - type: web
+    name: game-kings-chess
+    runtime: docker
+    plan: free
+    rootDir: chess
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: PASS_GATE_ENABLED
+        value: "false"
+      - key: CHECKOUT_URL
+        sync: false
+      - key: GUMROAD_PRODUCT_ID
+        sync: false
+      - key: PRICE_LABEL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true

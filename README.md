@@ -92,3 +92,19 @@ Game space and fun lab
     loadQuestion();
   </script></body>
 </html>
+
+## Chess
+
+Game Kings Chess is in `chess/`. Free play is pass-and-play or Easy computer, with the classic board and the core move, capture, check, and checkmate effects. Medium, Hard, and Expert — plus extra boards, piece styles, and capture effects — are one premium game at a time ($4.99, or `PRICE_LABEL`). A win grants one free replay. There are no cash prizes.
+
+The paid gate stays off unless `PASS_GATE_ENABLED=true`. Copy `chess/.env.example` to `chess/.env` and fill the blanks locally; do not commit secrets.
+
+```bash
+cd chess
+npm ci
+npm test
+npm run build
+npm start
+```
+
+Piece art is original (CC0). Move rules use [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause).
