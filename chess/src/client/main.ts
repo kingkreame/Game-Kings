@@ -1,12 +1,28 @@
 import { Chess, type Move, type Square } from 'chess.js'
+import { ART } from './art-metrics.js'
 import { Sfx } from './audio.js'
 import { BoardFx } from './effects.js'
-import { pieceSvg } from './pieces.js'
+import { pieceHtml } from './pieces.js'
 import { applyUci, castleRook, epCapturedSquare, kingSquare, moveToUci } from '../shared/game.js'
+import { LESSONS, explainMove, lessonById } from '../shared/lessons.js'
+import {
+  LESSON_IDS,
+  PROGRESS_KEY,
+  WINS_FOR_EXOTIC,
+  badgesFor,
+  chooseLook,
+  completeLesson,
+  emptyProgress,
+  parseProgress,
+  recordComputerWin,
+  titleFor,
+  type LookId,
+} from '../shared/progress.js'
 import { EFFECTS, PIECE_STYLES, THEMES } from '../shared/themes.js'
 import {
   TERMS,
   type Color,
+  type Difficulty,
   type EffectPackId,
   type GameView,
   type PassStatus,
@@ -28,7 +44,13 @@ const app: HTMLElement = root
 const state = {
   pass: null as PassStatus | null,
   screen: 'menu' as 'menu' | 'play',
-  mode: 'pass' as 'pass' | 'easy' | 'premium',
+  mode: 'pass' as 'pass' | 'easy' | 'premium' | 'practice' | 'train',
+  practiceLevel: 'easy' as Difficulty,
+  lessonId: null as string | null,
+  lessonNote: '',
+  hint: null as string | null,
+  winNoted: false,
+  progress: emptyProgress(),
   chess: new Chess(),
   human: 'w' as Color,
   colorChoice: 'w' as Color,
@@ -110,6 +132,57 @@ function activeEffect(): EffectPackId {
   return state.mode === 'premium' ? state.effect : 'core'
 }
 
+function activeLook(): LookId {
+  return state.progress.exoticUnlocked && state.progress.look === 'exotic' ? 'exotic' : 'classic'
+}
+
+function gateOn(): boolean {
+  return Boolean(state.pass?.gateEnabled)
+}
+
+function holdsCredit(): boolean {
+  return gateOn() && ((state.pass?.credits ?? 0) > 0 || Boolean(state.pass?.game))
+}
+
+function persistProgress(): void {
+  try {
+    localStorage.setItem(PROGRESS_KEY, JSON.stringify(state.progress))
+  } catch {
+    /* private mode can block storage; the prize still shows for this visit */
+  }
+}
+
+function loadProgress(): void {
+  try {
+    const raw = localStorage.getItem(PROGRESS_KEY)
+    state.progress = raw ? parseProgress(raw) : emptyProgress()
+  } catch {
+    state.progress = emptyProgress()
+  }
+}
+
+function rewardHtml(): string {
+  const progress = state.progress
+  const wins = Math.min(progress.computerWins, WINS_FOR_EXOTIC)
+  const meter = wins >= WINS_FOR_EXOTIC ? 3 : wins
+  const lessons = progress.lessonsDone.length
+  const toggle = progress.exoticUnlocked
+    ? `<div class="chips">${(['classic', 'exotic'] as const)
+        .map((look) => {
+          const label = look === 'classic' ? 'Marble and walnut' : 'Jeweled'
+          const pressed = activeLook() === look
+          return `<button type="button" class="chip" data-action="look" data-set="${look}" aria-pressed="${pressed}">${label}</button>`
+        })
+        .join('')}</div>`
+    : ''
+  const badges = badgesFor(progress)
+  return `<section class="reward" aria-label="Jeweled board progress"><p class="section-label">Jeweled board</p><p>Earn it on this device. Win ${WINS_FOR_EXOTIC} games against the computer, or finish all ${LESSON_IDS.length} training lessons. It is not for sale.</p><p class="progress-line"><strong>${wins} of ${WINS_FOR_EXOTIC} wins</strong><span>Lessons ${lessons} of ${LESSON_IDS.length}</span></p><div class="meter" data-wins="${meter}" role="img" aria-label="${wins} of ${WINS_FOR_EXOTIC} wins"><span></span></div><p class="fine">Title: ${escapeText(titleFor(progress))}. ${badges.length ? `Badges: ${badges.map((badge) => escapeText(badge)).join(', ')}.` : 'No badges yet.'} Rewards are badges, titles, and this board. No cash and no real-world prizes.</p>${toggle}</section>`
+}
+
+function levelName(level: string): string {
+  return `${level[0].toUpperCase()}${level.slice(1)}`
+}
+
 function describe(): string {
   const game = state.mode === 'premium' ? state.pass?.game : null
   if (game?.result === 'win') return 'Checkmate. You win. Your next premium game is free.'
@@ -128,7 +201,12 @@ function describe(): string {
   if (state.chess.isDraw()) return 'Draw by the fifty-move rule.'
   if (state.thinking) return 'Computer is thinking…'
   if (state.chess.isCheck()) return 'Check.'
+  if (state.mode === 'train') return state.lessonNote || lessonById(state.lessonId)?.prompt || 'Training.'
   if (state.mode === 'pass') return `${state.chess.turn() === 'w' ? 'White' : 'Black'} to move.`
+  if (state.mode === 'practice') {
+    const who = state.chess.turn() === 'w' ? 'White' : 'Black'
+    return state.chess.turn() === state.human ? `Your move. Self-play · ${levelName(state.practiceLevel)}.` : `${who} is thinking…`
+  }
   return state.chess.turn() === state.human ? 'Your move.' : 'Computer is thinking…'
 }
 
@@ -141,7 +219,20 @@ function renderMenu(): void {
   const gate = Boolean(state.pass?.gateEnabled)
   const credits = gate ? (state.pass?.credits ?? 0) : 0
   const soon = gate ? 'Premium' : 'Coming soon'
-  view.innerHTML = `<div class="menu" data-screen="menu"><p class="lede">Pass-and-play on one phone, or an easy computer game. No accounts, no ads, no cash prizes.</p><p class="section-label">Free</p><div class="stack"><button type="button" class="choice" data-action="pass"><span>Pass and play</span><span class="badge free">Free</span></button><button type="button" class="choice" data-action="easy"><span>Vs computer · Easy</span><span class="badge free">Free</span></button><button type="button" data-action="color" aria-pressed="${state.colorChoice === 'b'}">Play Easy as ${state.colorChoice === 'w' ? 'White' : 'Black'}</button></div><p class="section-label">Premium · ${escapeText(price())} a game</p><div class="stack" data-coming="premium">${(['medium', 'hard', 'expert'] as const).map((level) => `<button type="button" class="choice" data-action="open-premium" data-level="${level}"><span>Vs computer · ${level[0].toUpperCase()}${level.slice(1)}</span><span class="badge">${soon}</span></button>`).join('')}${premiumLive() ? `<button type="button" class="primary" data-action="resume">Resume premium game</button>` : ''}${gate && credits > 0 ? `<p class="fine">You have ${credits} premium credit${credits === 1 ? '' : 's'}.</p>` : ''}</div><p class="section-label">Boards, pieces, effects</p><div class="chips" data-coming="premium">${THEMES.map((theme) => `<button type="button" class="chip" data-action="${theme.premium ? 'open-premium' : 'noop'}" data-theme="${theme.id}" ${theme.premium ? '' : 'aria-pressed="true"'}>${theme.name}${theme.premium ? ` · ${soon}` : ''}</button>`).join('')}${PIECE_STYLES.map((style) => `<button type="button" class="chip" data-action="${style.premium ? 'open-premium' : 'noop'}" ${style.premium ? '' : 'aria-pressed="true"'}>${style.name}${style.premium ? ` · ${soon}` : ''}</button>`).join('')}${EFFECTS.map((effect) => `<button type="button" class="chip" data-action="${effect.premium ? 'open-premium' : 'noop'}" ${effect.premium ? '' : 'aria-pressed="true"'}>${effect.name}${effect.premium ? ` · ${soon}` : ''}</button>`).join('')}</div><p class="terms">${escapeText(terms())}</p><p class="fine">Original piece art is CC0. Rules use chess.js (BSD-2-Clause).</p>${state.note ? `<p class="alert">${escapeText(state.note)}</p>` : ''}</div>`
+  const practiceBadge = !gate ? 'Coming soon' : holdsCredit() ? 'Open' : 'Premium'
+  const levels = (['medium', 'hard', 'expert'] as const)
+    .map(
+      (level) =>
+        `<button type="button" class="choice" data-action="open-premium" data-level="${level}"><span>Vs computer · ${levelName(level)}</span><span class="badge">${soon}</span></button>`,
+    )
+    .join('')
+  const practice = (['medium', 'hard', 'expert'] as const)
+    .map(
+      (level) =>
+        `<button type="button" class="choice" data-action="practice" data-level="${level}"><span>Self-play · ${levelName(level)}</span><span class="badge">${practiceBadge}</span></button>`,
+    )
+    .join('')
+  view.innerHTML = `<div class="menu" data-screen="menu"><p class="lede">Pass-and-play on one phone, or an easy computer game. No accounts, no ads, no cash prizes.</p><p class="section-label">Free</p><div class="stack"><button type="button" class="choice" data-action="pass"><span>Pass and play</span><span class="badge free">Free</span></button><button type="button" class="choice" data-action="easy"><span>Self-play · Easy</span><span class="badge free">Free</span></button><button type="button" data-action="color" aria-pressed="${state.colorChoice === 'b'}">Play as ${state.colorChoice === 'w' ? 'White' : 'Black'}</button></div><p class="section-label">Premium · ${escapeText(price())} a game</p><div class="stack" data-coming="premium">${levels}${premiumLive() ? `<button type="button" class="primary" data-action="resume">Resume premium game</button>` : ''}${gate && credits > 0 ? `<p class="fine">You have ${credits} premium credit${credits === 1 ? '' : 's'}.</p>` : ''}</div><p class="section-label">Self-play levels and training</p><div class="stack">${practice}<button type="button" class="choice" data-action="train"><span>Training lessons</span><span class="badge">${practiceBadge}</span></button></div><p class="fine">Easy self-play and pass-and-play stay free. Medium, Hard, Expert self-play and the lessons open while you hold a premium credit. The credit is spent only when you start a premium game.</p>${rewardHtml()}<p class="section-label">Boards, pieces, effects</p><div class="chips" data-coming="premium">${THEMES.map((theme) => `<button type="button" class="chip" data-action="${theme.premium ? 'open-premium' : 'noop'}" data-theme="${theme.id}" ${theme.premium ? '' : 'aria-pressed="true"'}>${theme.name}${theme.premium ? ` · ${soon}` : ''}</button>`).join('')}${PIECE_STYLES.map((style) => `<button type="button" class="chip" data-action="${style.premium ? 'open-premium' : 'noop'}" ${style.premium ? '' : 'aria-pressed="true"'}>${style.name}${style.premium ? ` · ${soon}` : ''}</button>`).join('')}${EFFECTS.map((effect) => `<button type="button" class="chip" data-action="${effect.premium ? 'open-premium' : 'noop'}" ${effect.premium ? '' : 'aria-pressed="true"'}>${effect.name}${effect.premium ? ` · ${soon}` : ''}</button>`).join('')}</div><p class="terms">${escapeText(terms())}</p><p class="fine">Marble set by default. The jeweled set is earned. Rules use chess.js (BSD-2-Clause).</p>${state.note ? `<p class="alert">${escapeText(state.note)}</p>` : ''}</div>`
 }
 
 function escapeText(value: string): string {
@@ -189,7 +280,7 @@ function renderPlay(): void {
   state.screen = 'play'
   const view = document.querySelector('#view')
   if (!view) return
-  view.innerHTML = `<div class="play" data-screen="play"><div class="board-column"><p class="status" role="status" data-status></p><div class="tray top"></div><div class="board-wrap"><div class="board" data-board data-anim=""><div class="squares" data-squares></div><canvas class="fx" data-fx></canvas><div class="flash" data-flash></div><div class="streak" data-streak hidden></div><div class="pieces" data-pieces></div><div class="ripples" data-ripples></div><div class="mate" data-mate hidden>${CROWN.replace('<svg ', '<svg class="crown-burst" ')}<h2>Checkmate</h2><p data-mate-text></p></div></div></div><div class="tray bottom"></div></div><aside class="side"><div class="moves" data-moves></div><div class="controls"><button type="button" data-action="undo">Undo</button><button type="button" data-action="flip">Flip</button><button type="button" data-action="new">New game</button><button type="button" data-action="menu">Menu</button>${state.mode === 'premium' ? '<button type="button" data-action="resign">Resign</button>' : ''}</div><div data-look></div><div class="promo" data-promo hidden></div></aside></div>`
+  view.innerHTML = `<div class="play" data-screen="play"><div class="board-column"><p class="status" role="status" data-status></p><div class="tray top"></div><div class="board-wrap"><div class="board" data-board data-anim=""><div class="coords" data-coords></div><div class="playfield" data-grid><div class="squares" data-squares></div><canvas class="fx" data-fx></canvas><div class="flash" data-flash></div><div class="streak" data-streak hidden></div><div class="pieces" data-pieces></div><div class="ripples" data-ripples></div></div><div class="mate" data-mate hidden>${CROWN.replace('<svg ', '<svg class="crown-burst" ')}<h2>Checkmate</h2><p data-mate-text></p></div></div></div><div class="tray bottom"></div></div><aside class="side">${rewardHtml()}<div data-lesson></div><div class="moves" data-moves></div><div class="controls"><button type="button" data-action="undo">Undo</button><button type="button" data-action="flip">Flip</button><button type="button" data-action="new">New game</button><button type="button" data-action="menu">Menu</button>${state.mode === 'premium' ? '<button type="button" data-action="resign">Resign</button>' : ''}${state.mode === 'train' ? '<button type="button" data-action="hint">Hint</button><button type="button" data-action="retry-lesson">Try again</button>' : ''}</div><div data-look></div><div class="promo" data-promo hidden></div></aside></div>`
   const board = view.querySelector<HTMLElement>('[data-board]')
   const canvas = view.querySelector<HTMLCanvasElement>('[data-fx]')
   const streak = view.querySelector<HTMLElement>('[data-streak]')
@@ -197,7 +288,6 @@ function renderPlay(): void {
   const ripples = view.querySelector<HTMLElement>('[data-ripples]')
   if (board && canvas && streak && flash && ripples) {
     fx = new BoardFx(canvas, streak, flash, ripples)
-    fx.resize()
   }
   boardEvents?.abort()
   boardEvents = new AbortController()
@@ -206,12 +296,17 @@ function renderPlay(): void {
   board?.addEventListener('pointerup', onPointerUp, { signal: boardEvents.signal })
   board?.addEventListener('pointercancel', onPointerUp, { signal: boardEvents.signal })
   applyTheme()
+  fx?.resize()
   buildSquares()
   drawAll()
 }
 
 function boardEl(): HTMLElement | null {
   return document.querySelector<HTMLElement>('[data-board]')
+}
+
+function gridEl(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-grid]')
 }
 
 function visual(square: string): { x: number; y: number } {
@@ -231,6 +326,13 @@ function applyTheme(): void {
   board.style.setProperty('--dot-dark', theme.dotDark)
   board.style.setProperty('--frame', theme.frame)
   board.dataset.theme = theme.id
+  const art = ART[activeLook()]
+  board.dataset.set = activeLook()
+  board.style.setProperty('--gx', String(art.x))
+  board.style.setProperty('--gy', String(art.y))
+  board.style.setProperty('--gw', String(art.w))
+  board.style.setProperty('--gh', String(art.h))
+  board.style.setProperty('--board-art', `url("${art.board}")`)
 }
 
 function buildSquares(): void {
@@ -247,20 +349,24 @@ function buildSquares(): void {
       cell.className = `sq ${dark ? 'dark' : 'light'}`
       cell.dataset.sq = sq
       cell.setAttribute('role', 'gridcell')
-      if (y === 7) {
-        const label = document.createElement('span')
-        label.className = 'coord file'
-        label.textContent = 'abcdefgh'[file]
-        cell.appendChild(label)
-      }
-      if (x === 0) {
-        const label = document.createElement('span')
-        label.className = 'coord rank'
-        label.textContent = String(rank + 1)
-        cell.appendChild(label)
-      }
       host.appendChild(cell)
     }
+  }
+  const coords = document.querySelector('[data-coords]')
+  if (!coords) return
+  coords.innerHTML = ''
+  for (let i = 0; i < 8; i++) {
+    const file = state.flipped ? 7 - i : i
+    const rank = state.flipped ? i : 7 - i
+    const fileLabel = document.createElement('span')
+    fileLabel.className = 'coord file'
+    fileLabel.style.setProperty('--i', String(i))
+    fileLabel.textContent = 'abcdefgh'[file]
+    const rankLabel = document.createElement('span')
+    rankLabel.className = 'coord rank'
+    rankLabel.style.setProperty('--i', String(i))
+    rankLabel.textContent = String(rank + 1)
+    coords.append(fileLabel, rankLabel)
   }
 }
 
@@ -289,7 +395,7 @@ function drawPieces(): void {
       const pos = visual(cell.square)
       el.style.setProperty('--f', String(pos.x))
       el.style.setProperty('--r', String(pos.y))
-      el.innerHTML = pieceSvg(cell.type, cell.color, style)
+      el.innerHTML = pieceHtml(cell.type, cell.color, activeLook())
       el.setAttribute('aria-hidden', 'true')
       host.appendChild(el)
     }
@@ -312,6 +418,7 @@ function paintSquares(): void {
     cell.classList.toggle('dot', legal.has(sq) && !legal.get(sq))
     cell.classList.toggle('cap', Boolean(legal.get(sq)))
     cell.classList.toggle('check', check === sq)
+    cell.classList.toggle('hint', state.hint === sq)
     const piece = /^[a-h][1-8]$/.test(sq) ? state.chess.get(sq as Square) : undefined
     cell.setAttribute('aria-label', piece ? `${sq} ${piece.color === 'w' ? 'white' : 'black'} ${piece.type}` : `${sq} empty`)
   })
@@ -352,7 +459,7 @@ function updateTrays(): void {
     for (const type of taken[color]) {
       const mini = document.createElement('span')
       mini.className = 'mini'
-      mini.innerHTML = pieceSvg(type, color === 'w' ? 'b' : 'w', activeStyle())
+      mini.innerHTML = pieceHtml(type, color === 'w' ? 'b' : 'w', activeLook())
       tray.appendChild(mini)
     }
   }
@@ -375,29 +482,43 @@ function drawAll(): void {
   updateTrays()
   updateStatus()
   renderLook()
+  renderLesson()
 }
 
 function renderLook(): void {
   const host = document.querySelector('[data-look]')
   if (!host) return
   if (state.mode !== 'premium') {
-    host.innerHTML = '<p class="fine">Classic royal board and pieces.</p>'
+    const look = activeLook() === 'exotic' ? 'Jeweled board' : 'Marble and walnut'
+    host.innerHTML = `<p class="fine">${look}. ${escapeText(titleFor(state.progress))}.</p>`
     return
   }
   host.innerHTML = `<p class="section-label">This game</p><div class="chips">${THEMES.map((theme) => `<button type="button" class="chip" data-action="live-theme" data-theme="${theme.id}" aria-pressed="${state.theme === theme.id}">${theme.name}</button>`).join('')}${PIECE_STYLES.map((style) => `<button type="button" class="chip" data-action="live-style" data-style="${style.id}" aria-pressed="${state.style === style.id}">${style.name}</button>`).join('')}${EFFECTS.map((effect) => `<button type="button" class="chip" data-action="live-effect" data-effect="${effect.id}" aria-pressed="${state.effect === effect.id}">${effect.name}</button>`).join('')}</div>`
 }
 
 function canUndo(): boolean {
-  if (state.chess.isGameOver() && state.mode !== 'pass') return false
+  if (state.chess.isGameOver() && state.mode !== 'pass' && state.mode !== 'train') return false
   if (state.mode === 'premium' && state.pass?.game?.result) return false
-  if (state.mode === 'pass') return state.chess.history().length > 0
+  if (state.mode === 'pass' || state.mode === 'train') return state.chess.history().length > 0
   return state.chess.history({ verbose: true }).some((move) => move.color === state.human)
 }
 
+function renderLesson(): void {
+  const host = document.querySelector('[data-lesson]')
+  if (!host) return
+  const lesson = state.mode === 'train' ? lessonById(state.lessonId) : null
+  if (!lesson) {
+    host.innerHTML = ''
+    return
+  }
+  const done = state.progress.lessonsDone.includes(lesson.id)
+  host.innerHTML = `<p class="section-label">Lesson</p><p class="lesson-title">${escapeText(lesson.title)}</p><p>${escapeText(state.lessonNote || lesson.prompt)}</p><p class="fine">${done ? 'Lesson complete. The next one is on the menu.' : 'Use Hint, then play the move.'}</p>`
+}
+
 function squareFromPoint(clientX: number, clientY: number): string | null {
-  const board = boardEl()
-  if (!board) return null
-  const rect = board.getBoundingClientRect()
+  const grid = gridEl()
+  if (!grid) return null
+  const rect = grid.getBoundingClientRect()
   const x = clientX - rect.left
   const y = clientY - rect.top
   if (x < 0 || y < 0 || x >= rect.width || y >= rect.height) return null
@@ -441,9 +562,9 @@ function onPointerMove(event: PointerEvent): void {
   if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 8) return
   drag.moved = true
   const el = pieceBySquare(drag.from)
-  const board = boardEl()
-  if (!el || !board) return
-  const rect = board.getBoundingClientRect()
+  const grid = gridEl()
+  if (!el || !grid) return
+  const rect = grid.getBoundingClientRect()
   const size = rect.width / 8
   el.classList.add('dragging')
   el.style.setProperty('--x', `${event.clientX - rect.left - size / 2}px`)
@@ -525,7 +646,7 @@ function askPromotion(color: Color): Promise<PieceSymbol | null> {
   const host = document.querySelector<HTMLElement>('[data-promo]')
   if (!host) return Promise.resolve('q')
   host.hidden = false
-  host.innerHTML = (['q', 'r', 'b', 'n'] as const).map((type) => `<button type="button" data-promo="${type}" aria-label="${type}">${pieceSvg(type, color, activeStyle())}</button>`).join('')
+  host.innerHTML = (['q', 'r', 'b', 'n'] as const).map((type) => `<button type="button" data-promo="${type}" aria-label="${type}">${pieceHtml(type, color, activeLook())}</button>`).join('')
   return new Promise((resolve) => {
     const finish = (value: PieceSymbol | null) => {
       host.hidden = true
@@ -543,7 +664,11 @@ function askPromotion(color: Color): Promise<PieceSymbol | null> {
 async function playLocal(move: Move): Promise<void> {
   state.chess.move({ from: move.from, to: move.to, promotion: move.promotion })
   await animateMove(move)
-  if (!state.chess.isGameOver() && state.mode === 'easy') await runAi()
+  if (state.mode === 'train') {
+    gradeLesson(move)
+    return
+  }
+  if (!state.chess.isGameOver() && (state.mode === 'easy' || state.mode === 'practice')) await runAi()
 }
 
 async function runAi(): Promise<void> {
@@ -553,7 +678,8 @@ async function runAi(): Promise<void> {
   state.thinking = true
   updateStatus()
   try {
-    const uci = await think(state.chess.fen())
+    const level: Difficulty = state.mode === 'practice' ? state.practiceLevel : 'easy'
+    const uci = await think(state.chess.fen(), level)
     state.thinking = false
     if (token !== state.thinkToken || !uci) return
     const move = applyUci(state.chess, uci)
@@ -566,7 +692,7 @@ async function runAi(): Promise<void> {
   }
 }
 
-function think(fen: string): Promise<string | null> {
+function think(fen: string, difficulty: Difficulty = 'easy'): Promise<string | null> {
   const current = ensureWorker()
   if (!current) return Promise.resolve(fallbackEasy(fen))
   return new Promise((resolve) => {
@@ -580,7 +706,7 @@ function think(fen: string): Promise<string | null> {
       resolve(event.data.uci)
     }
     current.addEventListener('message', onMessage)
-    current.postMessage({ fen })
+    current.postMessage({ fen, difficulty })
   })
 }
 
@@ -633,6 +759,7 @@ async function revealServer(applied: string[], game: GameView | null, credits: n
     }
   }
   state.last = game?.lastMove ?? state.last
+  if (game?.result === 'win') noteComputerWin()
   if (game?.result === 'win' || game?.result === 'loss' || state.chess.isCheckmate()) showMate(!reduced.matches)
   drawAll()
 }
@@ -659,7 +786,7 @@ async function animateMove(move: Move): Promise<void> {
     await Promise.all(jobs)
     fx?.endTrail()
     const pos = visual(move.to)
-    const size = board.clientWidth / 8
+    const size = (gridEl()?.clientWidth ?? board.clientWidth) / 8
     fx?.ripple((pos.x + 0.5) * size, (pos.y + 0.5) * size)
     const captured = move.isEnPassant() ? epCapturedSquare(move) : move.isCapture() ? move.to : null
     if (captured) {
@@ -684,6 +811,10 @@ async function animateMove(move: Move): Promise<void> {
     board.dataset.anim = 'mate'
     showMate(!quiet)
     sfx.mate()
+    if (state.mode === 'easy' || state.mode === 'practice') {
+      const winner = state.chess.turn() === 'w' ? 'b' : 'w'
+      if (winner === state.human) noteComputerWin()
+    }
   } else {
     if (board.dataset.anim !== 'mate') board.dataset.anim = ''
     if (state.chess.isCheck()) sfx.check()
@@ -700,7 +831,7 @@ function glide(el: HTMLElement, from: string, to: string, piece: string): Promis
     const t0 = performance.now()
     const step = (now: number) => {
       const t = Math.min(1, (now - t0) / GLIDE_MS)
-      const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2
+      const eased = t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2
       const dx = end.x - start.x
       const dy = end.y - start.y
       const len = Math.hypot(dx, dy) || 1
@@ -711,7 +842,7 @@ function glide(el: HTMLElement, from: string, to: string, piece: string): Promis
       el.style.setProperty('--r', String(y))
       const board = boardEl()
       if (board && piece !== 'r') {
-        const size = board.clientWidth / 8
+        const size = (gridEl()?.clientWidth ?? board.clientWidth) / 8
         fx?.trailTo((x + 0.5) * size, (y + 0.5) * size)
       }
       if (t < 1) requestAnimationFrame(step)
@@ -768,6 +899,10 @@ function beginPass(): void {
   state.selected = null
   state.last = null
   state.note = ''
+  state.lessonNote = ''
+  state.hint = null
+  state.lessonId = null
+  state.winNoted = false
   state.busy = false
   renderPlay()
 }
@@ -775,15 +910,93 @@ function beginPass(): void {
 function beginEasy(): void {
   state.thinkToken++
   state.mode = 'easy'
+  state.practiceLevel = 'easy'
   state.human = state.colorChoice
   state.chess.reset()
   state.flipped = state.human === 'b'
   state.selected = null
   state.last = null
   state.note = ''
+  state.lessonNote = ''
+  state.hint = null
+  state.lessonId = null
+  state.winNoted = false
   state.busy = false
   renderPlay()
   if (state.human === 'b') void runAi()
+}
+
+function beginPractice(level: Difficulty): void {
+  state.thinkToken++
+  state.mode = 'practice'
+  state.practiceLevel = level
+  state.human = state.colorChoice
+  state.chess.reset()
+  state.flipped = state.human === 'b'
+  state.selected = null
+  state.last = null
+  state.note = ''
+  state.lessonNote = ''
+  state.hint = null
+  state.lessonId = null
+  state.winNoted = false
+  state.busy = false
+  renderPlay()
+  if (state.human === 'b') void runAi()
+}
+
+function beginTraining(id?: string): void {
+  const next =
+    LESSONS.find((lesson) => lesson.id === id) ??
+    LESSONS.find((lesson) => !state.progress.lessonsDone.includes(lesson.id)) ??
+    LESSONS[0]
+  state.thinkToken++
+  state.mode = 'train'
+  state.lessonId = next.id
+  state.lessonNote = ''
+  state.hint = null
+  state.winNoted = false
+  state.busy = false
+  state.thinking = false
+  state.selected = null
+  state.last = null
+  state.note = ''
+  try {
+    state.chess.load(next.fen)
+  } catch {
+    state.chess.reset()
+  }
+  state.human = state.chess.turn()
+  state.flipped = state.human === 'b'
+  renderPlay()
+}
+
+function noteComputerWin(): void {
+  if (state.winNoted) return
+  state.winNoted = true
+  state.progress = recordComputerWin(state.progress, state.chess.history().join(' '))
+  persistProgress()
+}
+
+function gradeLesson(move: Move): void {
+  const lesson = lessonById(state.lessonId)
+  if (!lesson) return
+  const graded = explainMove(lesson, moveToUci(move))
+  state.lessonNote = graded.text
+  state.hint = null
+  if (graded.done) {
+    state.progress = completeLesson(state.progress, lesson.id)
+    persistProgress()
+  }
+  updateStatus()
+  renderLesson()
+  document.querySelector('.reward')?.replaceWith(rewardNode())
+}
+
+function rewardNode(): HTMLElement {
+  const holder = document.createElement('div')
+  holder.innerHTML = rewardHtml()
+  return holder.firstElementChild as HTMLElement
 }
 
 async function beginPremium(level: PremiumDifficulty): Promise<void> {
@@ -891,6 +1104,62 @@ async function onClick(event: Event): Promise<void> {
   if (action === 'easy') {
     state.note = ''
     beginEasy()
+    return
+  }
+  if (action === 'practice') {
+    const level = target.dataset.level
+    if (level !== 'medium' && level !== 'hard' && level !== 'expert') return
+    if (!gateOn()) {
+      state.note = 'Self-play at Medium, Hard, and Expert opens with a premium credit. Easy self-play stays free. There is no cash prize.'
+      renderMenu()
+      return
+    }
+    if (!holdsCredit()) {
+      openSheet()
+      return
+    }
+    state.note = ''
+    beginPractice(level)
+    return
+  }
+  if (action === 'train') {
+    if (!gateOn()) {
+      state.note = 'Training opens with a premium credit. You can still earn the jeweled board by winning 3 free games on Easy. There is no cash prize.'
+      renderMenu()
+      return
+    }
+    if (!holdsCredit()) {
+      openSheet()
+      return
+    }
+    state.note = ''
+    beginTraining()
+    return
+  }
+  if (action === 'look') {
+    const look = target.dataset.set === 'exotic' ? 'exotic' : 'classic'
+    state.progress = chooseLook(state.progress, look)
+    persistProgress()
+    if (state.screen === 'menu') renderMenu()
+    else {
+      applyTheme()
+      drawAll()
+    }
+    return
+  }
+  if (action === 'hint' && state.mode === 'train' && !state.busy) {
+    const lesson = lessonById(state.lessonId)
+    if (!lesson) return
+    state.selected = lesson.hintMove.slice(0, 2)
+    state.hint = lesson.hintMove.slice(2, 4)
+    state.lessonNote = lesson.hint
+    paintSquares()
+    updateStatus()
+    renderLesson()
+    return
+  }
+  if (action === 'retry-lesson' && state.mode === 'train' && !state.busy) {
+    beginTraining(state.lessonId ?? undefined)
     return
   }
   if (action === 'open-premium') {
@@ -1022,8 +1291,9 @@ async function undo(): Promise<void> {
     return
   }
   const verbose = state.chess.history({ verbose: true })
-  if (state.mode === 'pass') {
+  if (state.mode === 'pass' || state.mode === 'train') {
     state.chess.undo()
+    if (state.mode === 'train') state.lessonNote = ''
   } else {
     let index = -1
     for (let i = verbose.length - 1; i >= 0; i--) {
@@ -1056,6 +1326,8 @@ async function newGame(): Promise<void> {
     if (!ok) return
   }
   if (state.mode === 'easy') beginEasy()
+  else if (state.mode === 'practice') beginPractice(state.practiceLevel)
+  else if (state.mode === 'train') beginTraining(state.lessonId ?? undefined)
   else beginPass()
 }
 
@@ -1110,6 +1382,7 @@ window.setInterval(() => {
 void boot()
 
 async function boot(): Promise<void> {
+  loadProgress()
   shell()
   try {
     state.pass = await api<PassStatus>('/api/pass/status')

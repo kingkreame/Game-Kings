@@ -95,7 +95,7 @@ Game space and fun lab
 
 ## Chess
 
-Game Kings Chess is in `chess/`. Free play is pass-and-play or Easy computer, with the classic board and the core move, capture, check, and checkmate effects. Medium, Hard, and Expert — plus extra boards, piece styles, and capture effects — are one premium game at a time ($4.99, or `PRICE_LABEL`). A win grants one free replay. There are no cash prizes.
+Game Kings Chess is in `chess/`. Free play is pass-and-play or Easy self-play, on the marble and walnut board. Medium, Hard, and Expert — plus extra color washes, piece grades, and capture effects — are one premium game at a time ($4.99, or `PRICE_LABEL`). A win grants one free replay. Training lessons and Medium/Hard/Expert self-play open while a premium credit is on the account; the credit is spent only when a premium game starts. The jeweled board is earned on the device after 3 wins against the computer or after all 3 lessons. Rewards are badges, titles, and that board. There are no cash prizes.
 
 The paid gate stays off unless `PASS_GATE_ENABLED=true`. Copy `chess/.env.example` to `chess/.env` and fill the blanks locally; do not commit secrets.
 
@@ -107,4 +107,4 @@ npm run build
 npm start
 ```
 
-Piece art is original (CC0). Move rules use [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause).
+Move rules use [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause). Painted sets are generated with `python3 scripts/prepare-art.py`.
