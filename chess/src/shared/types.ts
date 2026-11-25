@@ -1,6 +1,6 @@
 export type Color = 'w' | 'b'
 export type PieceSymbol = 'p' | 'n' | 'b' | 'r' | 'q' | 'k'
-export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert'
+export type Difficulty = 'easy' | 'medium' | 'hard' | 'expert' | 'master'
 export type PremiumDifficulty = Exclude<Difficulty, 'easy'>
 export type ThemeId = 'classic' | 'amethyst' | 'emerald' | 'rose'
 export type PieceStyleId = 'classic' | 'line' | 'stained' | 'marble'
@@ -8,7 +8,11 @@ export type EffectPackId = 'core' | 'lightning' | 'coins'
 export type SettleResult = 'win' | 'loss' | 'draw' | 'resign' | 'timeout'
 export type DrawReason = 'stalemate' | 'threefold' | 'insufficient' | 'fifty-move'
 
-export const PREMIUM_DIFFICULTIES: readonly PremiumDifficulty[] = ['medium', 'hard', 'expert']
+export const PREMIUM_DIFFICULTIES: readonly PremiumDifficulty[] = ['medium', 'hard', 'expert', 'master']
+
+export function isPremiumDifficulty(value: string): value is PremiumDifficulty {
+  return (PREMIUM_DIFFICULTIES as readonly string[]).includes(value)
+}
 export const IDLE_MS = 30 * 60 * 1000
 export const MAX_CREDITS = 20
 export const TERMS =

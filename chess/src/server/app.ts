@@ -10,6 +10,7 @@ import {
   type EffectPackId,
   type PassStatus,
   type PieceStyleId,
+  isPremiumDifficulty,
   type PremiumDifficulty,
   type Session,
   type ThemeId,
@@ -49,6 +50,8 @@ const BANNED_FIELDS = ['result', 'winner', 'credits', 'settled', 'fen', 'moves',
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.cjs': 'text/javascript; charset=utf-8',
+  '.wasm': 'application/wasm',
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
@@ -72,7 +75,7 @@ function securityHeaders(req: IncomingMessage, res: ServerResponse): void {
     Boolean((req.socket as { encrypted?: boolean }).encrypted)
   const policy = [
     "default-src 'self'",
-    "script-src 'self'",
+    "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self'",
     "img-src 'self' data:",
     "font-src 'self'",
@@ -175,7 +178,7 @@ function rejectClientResult(body: Record<string, unknown>): void {
 }
 
 function asDifficulty(value: unknown): PremiumDifficulty | null {
-  if (value === 'medium' || value === 'hard' || value === 'expert') return value
+  if (typeof value === 'string' && isPremiumDifficulty(value)) return value
   return null
 }
 
@@ -436,7 +439,7 @@ export function createApp(config: AppConfig): Server {
     const stamp = now()
     let applied: string[] = []
     const next = await lockSession(incoming, async (current) => {
-      applied = startPremium(current, { difficulty, player, theme, pieceStyle, effect }, stamp, choose)
+      applied = await startPremium(current, { difficulty, player, theme, pieceStyle, effect }, stamp, choose)
       return current
     })
     sendJson(
@@ -465,7 +468,7 @@ export function createApp(config: AppConfig): Server {
       if (!current.game || current.game.id !== body.gameId) {
         throw new HttpError(409, 'That premium game is not active.')
       }
-      applied = playPremiumMove(current, body.uci as string, stamp, choose)
+      applied = await playPremiumMove(current, body.uci as string, stamp, choose)
       return current
     })
     sendJson(

@@ -166,6 +166,8 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
   line-height: 1.45;
 }
 
+.fine a, .terms a { color: var(--gold); }
+
 .terms {
   border: 1px solid var(--line);
   border-radius: 12px;

@@ -3,7 +3,9 @@ import { ART } from './art-metrics.js'
 import { Sfx } from './audio.js'
 import { BoardFx } from './effects.js'
 import { pieceHtml } from './pieces.js'
+import { analyzeHint, analyzePosition } from './stockfish.js'
 import { applyUci, castleRook, epCapturedSquare, kingSquare, moveToUci } from '../shared/game.js'
+import { ENGINE_LEVELS, describeEngineHint, describeEngineMove } from '../shared/engine.js'
 import { LESSONS, explainMove, lessonById } from '../shared/lessons.js'
 import {
   LESSON_IDS,
@@ -21,6 +23,8 @@ import {
 import { EFFECTS, PIECE_STYLES, THEMES } from '../shared/themes.js'
 import {
   TERMS,
+  PREMIUM_DIFFICULTIES,
+  isPremiumDifficulty,
   type Color,
   type Difficulty,
   type EffectPackId,
@@ -180,7 +184,19 @@ function rewardHtml(): string {
 }
 
 function levelName(level: string): string {
-  return `${level[0].toUpperCase()}${level.slice(1)}`
+  if (level === 'easy' || level === 'medium' || level === 'hard' || level === 'expert' || level === 'master') {
+    return ENGINE_LEVELS[level].name
+  }
+  return level
+}
+
+function sanOf(fen: string, uci: string): string {
+  try {
+    const chess = new Chess(fen)
+    return applyUci(chess, uci)?.san ?? uci
+  } catch {
+    return uci
+  }
 }
 
 function describe(): string {
@@ -199,7 +215,10 @@ function describe(): string {
   if (state.chess.isThreefoldRepetition()) return 'Draw by threefold repetition.'
   if (state.chess.isInsufficientMaterial()) return 'Draw by insufficient material.'
   if (state.chess.isDraw()) return 'Draw by the fifty-move rule.'
-  if (state.thinking) return 'Computer is thinking…'
+  if (state.thinking) {
+    const level = state.mode === 'practice' ? state.practiceLevel : state.mode === 'premium' ? (state.pass?.game?.difficulty ?? 'expert') : 'master'
+    return ENGINE_LEVELS[level].stockfish ? 'Stockfish is thinking…' : 'Computer is thinking…'
+  }
   if (state.chess.isCheck()) return 'Check.'
   if (state.mode === 'train') return state.lessonNote || lessonById(state.lessonId)?.prompt || 'Training.'
   if (state.mode === 'pass') return `${state.chess.turn() === 'w' ? 'White' : 'Black'} to move.`
@@ -220,19 +239,15 @@ function renderMenu(): void {
   const credits = gate ? (state.pass?.credits ?? 0) : 0
   const soon = gate ? 'Premium' : 'Coming soon'
   const practiceBadge = !gate ? 'Coming soon' : holdsCredit() ? 'Open' : 'Premium'
-  const levels = (['medium', 'hard', 'expert'] as const)
-    .map(
-      (level) =>
-        `<button type="button" class="choice" data-action="open-premium" data-level="${level}"><span>Vs computer · ${levelName(level)}</span><span class="badge">${soon}</span></button>`,
-    )
-    .join('')
-  const practice = (['medium', 'hard', 'expert'] as const)
-    .map(
-      (level) =>
-        `<button type="button" class="choice" data-action="practice" data-level="${level}"><span>Self-play · ${levelName(level)}</span><span class="badge">${practiceBadge}</span></button>`,
-    )
-    .join('')
-  view.innerHTML = `<div class="menu" data-screen="menu"><p class="lede">Pass-and-play on one phone, or an easy computer game. No accounts, no ads, no cash prizes.</p><p class="section-label">Free</p><div class="stack"><button type="button" class="choice" data-action="pass"><span>Pass and play</span><span class="badge free">Free</span></button><button type="button" class="choice" data-action="easy"><span>Self-play · Easy</span><span class="badge free">Free</span></button><button type="button" data-action="color" aria-pressed="${state.colorChoice === 'b'}">Play as ${state.colorChoice === 'w' ? 'White' : 'Black'}</button></div><p class="section-label">Premium · ${escapeText(price())} a game</p><div class="stack" data-coming="premium">${levels}${premiumLive() ? `<button type="button" class="primary" data-action="resume">Resume premium game</button>` : ''}${gate && credits > 0 ? `<p class="fine">You have ${credits} premium credit${credits === 1 ? '' : 's'}.</p>` : ''}</div><p class="section-label">Self-play levels and training</p><div class="stack">${practice}<button type="button" class="choice" data-action="train"><span>Training lessons</span><span class="badge">${practiceBadge}</span></button></div><p class="fine">Easy self-play and pass-and-play stay free. Medium, Hard, Expert self-play and the lessons open while you hold a premium credit. The credit is spent only when you start a premium game.</p>${rewardHtml()}<p class="section-label">Boards, pieces, effects</p><div class="chips" data-coming="premium">${THEMES.map((theme) => `<button type="button" class="chip" data-action="${theme.premium ? 'open-premium' : 'noop'}" data-theme="${theme.id}" ${theme.premium ? '' : 'aria-pressed="true"'}>${theme.name}${theme.premium ? ` · ${soon}` : ''}</button>`).join('')}${PIECE_STYLES.map((style) => `<button type="button" class="chip" data-action="${style.premium ? 'open-premium' : 'noop'}" ${style.premium ? '' : 'aria-pressed="true"'}>${style.name}${style.premium ? ` · ${soon}` : ''}</button>`).join('')}${EFFECTS.map((effect) => `<button type="button" class="chip" data-action="${effect.premium ? 'open-premium' : 'noop'}" ${effect.premium ? '' : 'aria-pressed="true"'}>${effect.name}${effect.premium ? ` · ${soon}` : ''}</button>`).join('')}</div><p class="terms">${escapeText(terms())}</p><p class="fine">Marble set by default. The jeweled set is earned. Rules use chess.js (BSD-2-Clause).</p>${state.note ? `<p class="alert">${escapeText(state.note)}</p>` : ''}</div>`
+  const levels = PREMIUM_DIFFICULTIES.map(
+    (level) =>
+      `<button type="button" class="choice" data-action="open-premium" data-level="${level}"><span>Vs computer · ${levelName(level)}</span><span class="badge">${soon}</span></button>`,
+  ).join('')
+  const practice = PREMIUM_DIFFICULTIES.map(
+    (level) =>
+      `<button type="button" class="choice" data-action="practice" data-level="${level}"><span>Self-play · ${levelName(level)}</span><span class="badge">${practiceBadge}</span></button>`,
+  ).join('')
+  view.innerHTML = `<div class="menu" data-screen="menu"><p class="lede">Pass-and-play on one phone, or an easy computer game. No accounts, no ads, no cash prizes.</p><p class="section-label">Free</p><div class="stack"><button type="button" class="choice" data-action="pass"><span>Pass and play</span><span class="badge free">Free</span></button><button type="button" class="choice" data-action="easy"><span>Self-play · Easy</span><span class="badge free">Free</span></button><button type="button" data-action="color" aria-pressed="${state.colorChoice === 'b'}">Play as ${state.colorChoice === 'w' ? 'White' : 'Black'}</button></div><p class="section-label">Premium · ${escapeText(price())} a game</p><div class="stack" data-coming="premium">${levels}${premiumLive() ? `<button type="button" class="primary" data-action="resume">Resume premium game</button>` : ''}${gate && credits > 0 ? `<p class="fine">You have ${credits} premium credit${credits === 1 ? '' : 's'}.</p>` : ''}</div><p class="section-label">Self-play levels and training</p><div class="stack">${practice}<button type="button" class="choice" data-action="train"><span>Training lessons</span><span class="badge">${practiceBadge}</span></button></div><p class="fine">Easy self-play and pass-and-play stay free. Medium through Game King, and the lessons, open while you hold a premium credit. The credit is spent only when you start a premium game.</p>${rewardHtml()}<p class="section-label">Boards, pieces, effects</p><div class="chips" data-coming="premium">${THEMES.map((theme) => `<button type="button" class="chip" data-action="${theme.premium ? 'open-premium' : 'noop'}" data-theme="${theme.id}" ${theme.premium ? '' : 'aria-pressed="true"'}>${theme.name}${theme.premium ? ` · ${soon}` : ''}</button>`).join('')}${PIECE_STYLES.map((style) => `<button type="button" class="chip" data-action="${style.premium ? 'open-premium' : 'noop'}" ${style.premium ? '' : 'aria-pressed="true"'}>${style.name}${style.premium ? ` · ${soon}` : ''}</button>`).join('')}${EFFECTS.map((effect) => `<button type="button" class="chip" data-action="${effect.premium ? 'open-premium' : 'noop'}" ${effect.premium ? '' : 'aria-pressed="true"'}>${effect.name}${effect.premium ? ` · ${soon}` : ''}</button>`).join('')}</div><p class="terms">${escapeText(terms())}</p><p class="fine">Marble set by default. The jeweled set is earned. Rules use chess.js (BSD-2-Clause). Medium and above, and lesson hints, use <a href="https://github.com/official-stockfish/Stockfish">Stockfish 19</a> (GPL-3.0) in a background worker. <a href="/engine/COPYING.txt">License</a>. <a href="https://github.com/nmrugg/stockfish.js/releases/tag/v19.0.1">WASM source</a>.</p>${state.note ? `<p class="alert">${escapeText(state.note)}</p>` : ''}</div>`
 }
 
 function escapeText(value: string): string {
@@ -246,7 +261,7 @@ function openSheet(level?: PremiumDifficulty): void {
   const credits = gate ? (state.pass?.credits ?? 0) : 0
   const checkout = gate ? state.pass?.checkoutUrl || '' : ''
   const look = credits > 0 ? `<p class="section-label">Look for this game</p><div class="chips">${THEMES.map((theme) => `<button type="button" class="chip" data-action="pick-theme" data-theme="${theme.id}" aria-pressed="${state.theme === theme.id}">${theme.name}</button>`).join('')}${PIECE_STYLES.map((style) => `<button type="button" class="chip" data-action="pick-style" data-style="${style.id}" aria-pressed="${state.style === style.id}">${style.name}</button>`).join('')}${EFFECTS.map((effect) => `<button type="button" class="chip" data-action="pick-effect" data-effect="${effect.id}" aria-pressed="${state.effect === effect.id}">${effect.name}</button>`).join('')}</div>` : ''
-  const starts = credits > 0 ? `<div class="stack">${(['medium', 'hard', 'expert'] as const).map((item) => `<button type="button" class="primary" data-action="start-premium" data-level="${item}">Use 1 credit · ${item[0].toUpperCase()}${item.slice(1)}</button>`).join('')}</div>` : ''
+  const starts = credits > 0 ? `<div class="stack">${PREMIUM_DIFFICULTIES.map((item) => `<button type="button" class="primary" data-action="start-premium" data-level="${item}">Use 1 credit · ${levelName(item)}</button>`).join('')}</div>` : ''
   const buy = gate
     ? `${checkout ? `<a class="buy-link" href="${escapeText(checkout)}" rel="noopener noreferrer">Buy a premium game</a>` : '<p class="fine">The checkout link is not configured yet. A license key can still be redeemed.</p>'}<form data-action="redeem"><label for="license-key">Gumroad license key</label><input id="license-key" name="licenseKey" autocomplete="off" spellcheck="false" maxlength="80" placeholder="Paste your key" /><div class="row"><button type="submit" class="primary">Redeem one game</button></div><p class="alert" data-alert></p></form>${starts}`
     : `<button type="button" disabled>Coming soon</button>`
@@ -662,10 +677,11 @@ function askPromotion(color: Color): Promise<PieceSymbol | null> {
 }
 
 async function playLocal(move: Move): Promise<void> {
+  const before = state.chess.fen()
   state.chess.move({ from: move.from, to: move.to, promotion: move.promotion })
   await animateMove(move)
   if (state.mode === 'train') {
-    gradeLesson(move)
+    await gradeLesson(move, before)
     return
   }
   if (!state.chess.isGameOver() && (state.mode === 'easy' || state.mode === 'practice')) await runAi()
@@ -692,7 +708,16 @@ async function runAi(): Promise<void> {
   }
 }
 
-function think(fen: string, difficulty: Difficulty = 'easy'): Promise<string | null> {
+async function think(fen: string, difficulty: Difficulty = 'easy'): Promise<string | null> {
+  const limit = ENGINE_LEVELS[difficulty].stockfish
+  if (limit) {
+    const found = await analyzePosition(fen, limit)
+    if (found?.best) return found.best
+  }
+  return thinkLight(fen, difficulty)
+}
+
+function thinkLight(fen: string, difficulty: Difficulty): Promise<string | null> {
   const current = ensureWorker()
   if (!current) return Promise.resolve(fallbackEasy(fen))
   return new Promise((resolve) => {
@@ -706,7 +731,7 @@ function think(fen: string, difficulty: Difficulty = 'easy'): Promise<string | n
       resolve(event.data.uci)
     }
     current.addEventListener('message', onMessage)
-    current.postMessage({ fen, difficulty })
+    current.postMessage({ fen, difficulty: difficulty === 'easy' ? 'easy' : difficulty })
   })
 }
 
@@ -978,13 +1003,33 @@ function noteComputerWin(): void {
   persistProgress()
 }
 
-function gradeLesson(move: Move): void {
+async function gradeLesson(move: Move, before: string): Promise<void> {
   const lesson = lessonById(state.lessonId)
   if (!lesson) return
-  const graded = explainMove(lesson, moveToUci(move))
-  state.lessonNote = graded.text
+  const played = moveToUci(move)
+  const scripted = explainMove(lesson, played)
+  let text = scripted.text
+  let done = scripted.done
+  const best = await analyzeHint(before)
+  if (best) {
+    const after = state.chess.isGameOver() ? null : await analyzeHint(state.chess.fen())
+    const verdict = describeEngineMove({
+      playedUci: played,
+      bestUci: best.best,
+      playedSan: move.san,
+      bestSan: sanOf(before, best.best),
+      bestCp: best.cp,
+      playedCp: after ? (after.cp === null ? null : -after.cp) : null,
+      bestMate: best.mate,
+      playedMate: after ? (after.mate === null ? null : -after.mate) : state.chess.isCheckmate() ? 0 : null,
+    })
+    const flavor = lesson.good[played] ?? lesson.poor[played]
+    text = flavor ? `${verdict.text} ${flavor}` : verdict.text
+    done = state.chess.isCheckmate() || verdict.done
+  }
+  state.lessonNote = text
   state.hint = null
-  if (graded.done) {
+  if (done) {
     state.progress = completeLesson(state.progress, lesson.id)
     persistProgress()
   }
@@ -1108,9 +1153,9 @@ async function onClick(event: Event): Promise<void> {
   }
   if (action === 'practice') {
     const level = target.dataset.level
-    if (level !== 'medium' && level !== 'hard' && level !== 'expert') return
+    if (!level || !isPremiumDifficulty(level)) return
     if (!gateOn()) {
-      state.note = 'Self-play at Medium, Hard, and Expert opens with a premium credit. Easy self-play stays free. There is no cash prize.'
+      state.note = 'Self-play from Medium up to Game King opens with a premium credit. Easy self-play stays free. There is no cash prize.'
       renderMenu()
       return
     }
@@ -1150,12 +1195,28 @@ async function onClick(event: Event): Promise<void> {
   if (action === 'hint' && state.mode === 'train' && !state.busy) {
     const lesson = lessonById(state.lessonId)
     if (!lesson) return
-    state.selected = lesson.hintMove.slice(0, 2)
-    state.hint = lesson.hintMove.slice(2, 4)
-    state.lessonNote = lesson.hint
-    paintSquares()
+    state.busy = true
+    state.thinking = true
+    state.lessonNote = 'Stockfish is looking…'
     updateStatus()
-    renderLesson()
+    try {
+      const found = await analyzeHint(state.chess.fen())
+      if (found) {
+        state.selected = found.best.slice(0, 2)
+        state.hint = found.best.slice(2, 4)
+        state.lessonNote = describeEngineHint(sanOf(state.chess.fen(), found.best), found.cp, found.mate)
+      } else {
+        state.selected = lesson.hintMove.slice(0, 2)
+        state.hint = lesson.hintMove.slice(2, 4)
+        state.lessonNote = lesson.hint
+      }
+    } finally {
+      state.busy = false
+      state.thinking = false
+      paintSquares()
+      updateStatus()
+      renderLesson()
+    }
     return
   }
   if (action === 'retry-lesson' && state.mode === 'train' && !state.busy) {

@@ -52,6 +52,7 @@ describe('premium gate', () => {
     expect(health.status).toBe(200)
     expect(health.json).toEqual({ ok: true })
     const policy = health.headers.get('content-security-policy') ?? ''
+    expect(policy).toContain("script-src 'self' 'wasm-unsafe-eval'")
     expect(policy).toContain("default-src 'self'")
     expect(policy).toContain("frame-ancestors 'none'")
     expect(health.headers.get('x-content-type-options')).toBe('nosniff')

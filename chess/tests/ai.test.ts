@@ -11,7 +11,7 @@ function legal(fen: string, uci: string | null): boolean {
 }
 
 describe('computer moves', () => {
-  const levels: Difficulty[] = ['easy', 'medium', 'hard', 'expert']
+  const levels: Difficulty[] = ['easy', 'medium', 'hard', 'expert', 'master']
 
   it.each(levels)('%s returns a legal move from the opening', (level) => {
     const fen = new Chess().fen()

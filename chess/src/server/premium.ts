@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import { Chess } from 'chess.js'
 import { chooseAiMove } from '../shared/ai.js'
+import { ENGINE_LEVELS, acceptEngineMove } from '../shared/engine.js'
+import { searchStockfish } from './stockfish.js'
 import {
   applyUci,
   capturedBy,
@@ -23,7 +25,7 @@ import type {
 import { IDLE_MS, MAX_CREDITS } from '../shared/types.js'
 import { HttpError } from './errors.js'
 
-export type AiChooser = (fen: string, difficulty: PremiumDifficulty) => string | null
+export type AiChooser = (fen: string, difficulty: PremiumDifficulty) => string | null | Promise<string | null>
 
 const winsGranted = new Set<string>()
 
@@ -51,8 +53,9 @@ function settlePosition(session: Session, fenReady: Chess): void {
   game.settled = outcome
 }
 
-function pushAi(chess: Chess, gameDifficulty: PremiumDifficulty, choose: AiChooser): string {
-  const uci = choose(chess.fen(), gameDifficulty)
+async function pushAi(chess: Chess, gameDifficulty: PremiumDifficulty, choose: AiChooser): Promise<string> {
+  const chosen = await choose(chess.fen(), gameDifficulty)
+  const uci = acceptEngineMove(chess.fen(), chosen)
   if (!uci || !applyUci(chess, uci)) {
     throw new HttpError(500, 'The computer could not move.')
   }
@@ -98,7 +101,7 @@ export interface StartInput {
   effect: EffectPackId
 }
 
-export function startPremium(session: Session, input: StartInput, now: number, choose: AiChooser): string[] {
+export async function startPremium(session: Session, input: StartInput, now: number, choose: AiChooser): Promise<string[]> {
   expireIfIdle(session, now)
   if (session.game && !session.game.settled) {
     throw new HttpError(409, 'Finish or resign the current premium game first.')
@@ -119,7 +122,7 @@ export function startPremium(session: Session, input: StartInput, now: number, c
   }
   if (input.player === 'b') {
     const chess = new Chess()
-    const uci = pushAi(chess, input.difficulty, choose)
+    const uci = await pushAi(chess, input.difficulty, choose)
     session.game.moves.push(uci)
     applied.push(uci)
     settlePosition(session, chess)
@@ -127,7 +130,7 @@ export function startPremium(session: Session, input: StartInput, now: number, c
   return applied
 }
 
-export function playPremiumMove(session: Session, uci: string, now: number, choose: AiChooser): string[] {
+export async function playPremiumMove(session: Session, uci: string, now: number, choose: AiChooser): Promise<string[]> {
   const game = session.game
   if (!game) throw new HttpError(409, 'No premium game is in progress.')
   if (expireIfIdle(session, now) || game.settled === 'timeout') return []
@@ -140,7 +143,7 @@ export function playPremiumMove(session: Session, uci: string, now: number, choo
   game.moves = [...game.moves, uci]
   game.lastActivity = now
   if (!chess.isGameOver()) {
-    const reply = pushAi(chess, game.difficulty, choose)
+    const reply = await pushAi(chess, game.difficulty, choose)
     game.moves = [...game.moves, reply]
     applied.push(reply)
   }
@@ -183,6 +186,15 @@ export function restylePremium(
   game.lastActivity = now
 }
 
-export function defaultChooser(fen: string, difficulty: PremiumDifficulty): string | null {
+export async function defaultChooser(fen: string, difficulty: PremiumDifficulty): Promise<string | null> {
+  const limit = ENGINE_LEVELS[difficulty].stockfish
+  if (limit) {
+    try {
+      const uci = await searchStockfish(fen, limit)
+      if (uci) return uci
+    } catch {
+      /* the light search still has to answer */
+    }
+  }
   return chooseAiMove(fen, difficulty)
 }

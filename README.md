@@ -107,4 +107,4 @@ npm run build
 npm start
 ```
 
-Move rules use [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause). Painted sets are generated with `python3 scripts/prepare-art.py`.
+Move rules use [chess.js](https://github.com/jhlywa/chess.js) (BSD-2-Clause). Medium and above use [Stockfish 19](https://github.com/official-stockfish/Stockfish) (GPL-3.0), lite single-threaded WASM, with the license in `chess/public/engine/COPYING.txt`. Painted sets are generated with `python3 scripts/prepare-art.py`.

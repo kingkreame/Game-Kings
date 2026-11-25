@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import { isEffectId, isPieceStyleId, isThemeId } from '../shared/themes.js'
-import { MAX_CREDITS, type Session, type SessionGame } from '../shared/types.js'
+import { isPremiumDifficulty, MAX_CREDITS, type Session, type SessionGame } from '../shared/types.js'
 
 export const COOKIE_NAME = 'gkc_session'
 const UCI = /^[a-h][1-8][a-h][1-8][qrbn]?$/
@@ -14,7 +14,7 @@ function isGame(value: unknown): value is SessionGame {
   if (!value || typeof value !== 'object') return false
   const game = value as Record<string, unknown>
   if (typeof game.id !== 'string' || !/^[a-f0-9]{32}$/.test(game.id)) return false
-  if (game.difficulty !== 'medium' && game.difficulty !== 'hard' && game.difficulty !== 'expert') return false
+  if (typeof game.difficulty !== 'string' || !isPremiumDifficulty(game.difficulty)) return false
   if (game.player !== 'w' && game.player !== 'b') return false
   if (!Array.isArray(game.moves) || game.moves.length > 500) return false
   if (!game.moves.every((move) => typeof move === 'string' && UCI.test(move))) return false

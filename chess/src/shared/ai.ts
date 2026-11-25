@@ -239,9 +239,10 @@ export function chooseAiMove(
   const legal = chess.moves({ verbose: true })
   if (legal.length === 0) return null
   if (difficulty === 'easy') return easyChoose(chess, legal, rng)
+  // Fallback when Stockfish is unavailable. Expert and Game King share the deepest light search.
   const maxDepth = difficulty === 'medium' ? 2 : difficulty === 'hard' ? 3 : 4
-  const useQuiescence = difficulty === 'expert'
-  const cap = difficulty === 'expert' ? 16000 : 10000
+  const useQuiescence = difficulty === 'expert' || difficulty === 'master'
+  const cap = difficulty === 'expert' || difficulty === 'master' ? 16000 : 10000
   let best = moveToUci(orderMoves(legal)[0])
   for (let depth = 1; depth <= maxDepth; depth++) {
     const found = searchRoot(chess, depth, useQuiescence, cap)

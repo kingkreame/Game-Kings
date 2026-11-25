@@ -1,0 +1,11 @@
+Game Kings Chess uses Stockfish 19 (lite, single-threaded) compiled to WebAssembly.
+
+Stockfish is free software under the GNU General Public License version 3.
+The license text is in COPYING.txt beside this file.
+
+Official source: https://github.com/official-stockfish/Stockfish
+WASM port (stockfish.js 19.0.1) by Nathan Rugg / Chess.com: https://github.com/nmrugg/stockfish.js
+
+The lite network is smaller than Stockfish's full net so it can load on a phone.
+Game King runs that build at full skill with a move-time cap of a few seconds.
+The full network is about 99MB and is not shipped.

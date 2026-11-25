@@ -2,7 +2,7 @@ import { chooseAiMove } from '../shared/ai.js'
 import type { Difficulty } from '../shared/types.js'
 
 function level(value: unknown): Difficulty {
-  if (value === 'medium' || value === 'hard' || value === 'expert') return value
+  if (value === 'medium' || value === 'hard' || value === 'expert' || value === 'master') return value
   return 'easy'
 }
 
